@@ -1,0 +1,242 @@
+        BUILDING LINKEDIN WITH NEXT 12 - TAILWINDCSS- MONGODB - NEXTAUTH - RECOIL)
+
+Source: https://www.youtube.com/watch?v=JGhuAJKGRN0
+
+Lo mejor es crear el proyecto con npx create-next-app --typescript y despues añadir tailwind(seguir cualquier guia)
+Dado que tailwind ya hace un normalize puedo borrar todo el global.css y poner los utils de tailwind.
+(de echo mientras no los ponga no hace el normalize,ojo.) 
+
+NOTA: no necesito el modo estricto.Puedo quitarlo del next.config.js perfectamente.
+
+Fijate que usará Mui en la version 5.Perfecto.En compilerOptions en la propiedad paths puedo especificar alias para rutas(parece que esto obliga a usar una baseUrl un poco más abajo,lo cual tiene mucho sentido,asinto)
+> ─ npm i @mui/material @emotion/react @emotion/styled @mui/icons-material
+
+Fijate que está usando la propiedad priority.Esta propiedad básicamente previene el lazy loading de la imagen,el cual se da por defecto en una Image de Next.
+<Image src="/images/li-logo2.svg" layout="fill" priority alt="linkedin-logo2" />
+Esto además tiene que ver con el concepto de LCP(Largest Contenful Paint),que normalmente es la imagen mas grande o el texto más grande que hay en el viewport de la página.Con priority se da prioridad a que se cargue este LCP lo primero(y que normalmente será el último por ser el que más pese)
+En right-5
+
+Recuerda que tienes por ahi un ejemplo de Next con prettier y eslint(creo que era eslint + estlint-config-prettier + prettier).¿De quien era?
+
+                        IMPLEMENTING NEXT AUTH MINUTE 1H 14M
+
+NOTA: hay que instalar el modulo next-auth y el adapter @next-auth/mongo-db-adapter y la lib mongodb(aunque estos dos últimos son sólo para persistir la sesión en la base de datos)
+Lo primero es crear un file llamado [...nextauth].js en la carpeta /pages/api/auth.Aqui va el route handler que mirará por la autenticación.                        
+Para crear un proyecto de linkedIn y obtener las credenciales privada y pública lo puedo hacer en:
+https://www.linkedin.com/developers/apps
+NOTA: parece que usaremos Google.Para crear un proyecto con ellos puedo ir a cloud.google.com y pinchar en console.Creo un proyecto,lo seleciono y voy a la API a crear credenciales(fijate que Firebase me hacia esto por mi,pero ahora usaremos mongo y hay que crearlas a mano).
+Clickeo pues en Crear Credenciales y eligo de tipo OAuth(fijate que son v2.0).Me pedirá rellenar la pantalla de consentimiento(es la pantalla que hará popup con el modal de Google),como tipo de usuarios eligo externos(es decir,todos) y despues relleno el resto de features para personalizar la pantalla de consentimiento que hará popup(fijate que puedo usar iconos,imagenes,etc. para personalizarla un poco).
+TIP: también me pedirá configurar los scopes(son permisos que pido al usuario,por ejemplo en la de Spotify pedimos más permisos de lo normal,para saber si tenia una cuenta premium el user.Esto son los scopes)
+NOTA: la app parece que nace en modo testing.si quisiera pasarla a producción hay que publicarla,de momento queremos modo testing.
+Ahora si,vuelvo a dar en create credentials de tipo OAuth tras rellenar la pantalla de consentimiento para el proyecto,eligo un proyecto web y ya rellenaremos la url de origen y de redireccionamiento más tarde.Guardo las keys pública y privada en un .env.local
+
+Bien, creo también el lib/mongodbjs siguiendo la libreria next-auth en su sección adapters:
+Despues le paso el adapter en el [...nextauth].js:
+
+secret: <- recuerda que para producción es necesario
+adapter: MongoDBAdapter(clientPromise)
+session: { strategy: 'jwt' } <- si bien es jwt por defecto al usar un adapter se cambia a 'database' y solo usa una cookie temporal en la session que puede acceder a la db,no queremos esto,queremos el jwt de nuevo.
+
+                ADDING MIDDLEWARE FOR CHECKING THE JWT 1H 50M
+
+Para crear un middleware que intercepte una ruta hay que crear un archivo llamado _middleware.ts a la altura que yo quiera del sistema de archivos.Dentro de él va una function llamada middleware tmb(ver documentación).Esto sólo esta desde Nextv12.0
+NOTA: los middlewares pueden ser usados pasra cualquier cosa que comparta lógica entre un grupo de páginas:
+1- Authentication
+2- Bot protection
+3- Redirects and rewrites
+4- Handling unsupported browsers                
+5- Feature flags and A/B testing
+6- Server-side analytics
+7- Advanced i18n routing requirements
+8- Logging
+
+Bien, el middleware más usado obviamente va a ser por el jwt(además de posibles roles).Es bastante sencillo,creo un file en /pages para que intercepte todas las peticiones:
+
+* En pages/_middleware.ts:
+
+import { getToken } from "next-auth/jwt";
+import { NextRequest, NextResponse } from "next/server";
+
+export async function middleware(req: NextRequest) {
+  if (req.nextUrl.pathname === "/") {
+    /* getToken captura el token de la req,siempre que vaya en el header Authorization o en una cookie */
+    const session = await getToken({
+      req,
+      secret: process.env.JWT_SECRET,
+      secureCookie: process.env.NODE_ENV === "production", //es obligatorio para que funcione en prod
+    });
+    // si no hay jwt valido redirigo.Fijate que podria comprobar roles,etc aqui,y que puedo usar redirect o rewrite
+    if (!session) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/home";
+      return NextResponse.rewrite(url);
+      // return NextResponse.redirect(`${req.nextUrl.origin}/home`); //otra forma
+    }
+Ya lo hace todo con getToken(increible),luego sólo hay que redirigir,en esta app al home(pero normalmente sera a /login).Nosotros dejamos el login en /home.Dado que aun no tengo token puedo tratar de ir a / y veré que me redirige a /home.
+Puedo observar que es terriblemente sencillo comprobar el jwt y redirigir con un middleware
+
+Bien,y despues de tener el middleware y de enlazar a Google como provider puedo llamar a su popup en cualquier botón con la función built-in signin y lo mismo para el signout:
+ {/*Sign In Button  */}
+   {Object.values(providers!).map((provider) =>
+     <button key={provider.name} className="text-blue-700 font-semibold rounded-full border border-blue-700 px-5 py-1.5 transition-all hover:border-2"
+       onClick={() => signIn(provider.id, { callbackUrl: "/" })}
+     >
+       Sign in with {provider.name}
+     </button>
+   )}
+Claro que esto necesita de hacer a la página SSR dado que hay que llamar a:
+
+export async function getServerSideProps(context: NextPageContext) {
+  const providers = await getProviders()
+
+  return {
+    props: {
+      providers,
+    },
+  }
+}
+
+Y recuerda que también necesitaba de meter toda la app en un SessionProvider:
+import { SessionProvider } from 'next-auth/react'
+
+function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
+  return (
+    <SessionProvider session={session} refetchInterval={5 * 60}>
+      <Component {...pageProps} />
+    </SessionProvider>
+
+Ahora si,ya podemos logearnos y persistir la session en la db,asi que empecemos con la main page.
+
+            IMPLEMENTAR DARK MODE(MAIN PAGE HEADER) 2H 10M
+
+En Next también es muy sencillo implementar un dark mode usando la libreria next-themes.
+Para gestionar esto voy a instalar dos librerias(framer-motion y next-themes):
+En cuanto a next-themes,para añadir el dark theme hay que añadir esto al _app.js:
+>npm install next-themes 
+
+import { ThemeProvider } from 'next-themes'
+
+  <ThemeProvider>
+    <Component {...pageProps} />
+  </ThemeProvider>
+
+Simplemente es llamar al Provider de next-themes.Despues,para cambiarlo la libreria me proporciona un hook useTheme:
+import { useTheme } from 'next-themes'
+
+const { theme, setTheme } = useTheme() <- ojo,que retorna un objeto el hook 
+
+button onClick={() => setTheme('dark')}
+* Importante,dado que estamos en Next y en SSR el theme es undefined en el back asi que hay que usar un efecto:
+const [mounted, setMounted] = useState<boolean>(false);
+const { setTheme, resolvedTheme, theme } = useTheme();
+
+// After mounting, we have access to the theme
+useEffect(() => setMounted(true), [])
+
+console.log("Current theme is", theme);
+* Puedo observar que es sencillísimo implementar el dark mode,y dado que estoy estilizando con Tailwind es igual de sencillo estilizar.
+
+En cuanto a framer-motion se instala igual,hay varias web para ver animaciones:
+>npm install framer-motion 
+
+import { motion } from 'framer-motion'
+
+<motion.div animate={{ opacity: 1 }} transition={{ duration: 1 }}>
+* Puedo poner la keyword motion delante de cualquier tag html y asi usar la libreria con la prop animate
+NOTA: en Tailwind no hay pseudoselector light(si que hay dark).Esto es porque por defecto toda clase va a apuntar al theme light y si quiero cambiarlo ya si tendré que usar dark:bg...
+
+
+                  IMPLEMENTANDO SIDEBAR Y SIGNOUT
+
+Recuerda que para poder usar signout tengo que englobar en el HOC SessionProvider(algo que ya he hecho) y además en el page/index.tsx tengo tengo que usar SSR lamentablemente para pasar la sesión a esa page:
+
+PASO DOS(en el pages/index.tsx):
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
+  // checking if the user is authenticated(this is processed in the server)
+  const session = await getSession(ctx);
+  /* si no la hubiera redireccionamos al login.Permanent a true usará codigo 308 que cachea la ruta forever,pudiendo volver a ella.A false usa statusCode 307 que es temporal y no cachea la ruta.Es lo que quiero,no poder volver hacia atras.Las redirecciones son lo primero en ejecutarse,asi que ni siquiera tengo acceso a /public por ejemplo, mientras ocurren */
+  if (!session) {
+    return {
+      redirect: {
+        destination: '/home',
+        permanent: false,
+      }
+    }
+  }
+
+  return {
+    props: {
+      session
+    }
+  }
+}
+
+PASO UNO:
+function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
+  return (
+    <ThemeProvider attribute='class'>
+      <SessionProvider session={session} refetchInterval={5 * 60}>
+        <Component {...pageProps} />
+      </SessionProvider>
+    </ThemeProvider>
+  )
+}
+
+Ahora ya cualquier componente puede acceder a la sesión.Si bien hay otras formas de hacerlo,está es la recomendaba,ya que no repito código.
+NOTA: realizar esta carga mediante SSR en el index junto con el HOC me da acceso a la session en el cliente(en components).Esto es realmente poderoso.
+En cualquier componente(por ejemplo components/Sidebar):
+const Sidebar = () => {
+  const { data: session } = useSession();
+  console.log(session);
+
+NOTA: recuerda que puedo sacar más cosas del hook useSession,como el status, y comprobar que si está en loading o unauthenticated puedo pintar lo que quiera:
+const { data, status } = useSession(); <- y tmb tenia un tercer arg ??
+
+          4h 21m USANDO RECOIL
+
+Lo primero es instalar la libreria:
+>npm install recoil
+Tengo la doc en https://recoiljs.org/docs/introduction/installation        
+
+Despues hay que englobar la app en el HOC RecoilRoot:
+import { RecoilRoot } from 'recoil'
+
+<RecoilRoot>
+  <Component {...pageProps} />
+</RecoilRoot>
+
+Y ahora en el directorio 'atoms' creo los átomos de estado,por ejemplo, puedo crear un simple boleano que comparta toda la app que represente si el modal está abierto o cerrado:
+
+import { atom } from "recoil";
+
+export const modalState = atom<boolean>({
+  key: "modalState",
+  default: false,
+});
+
+Y puedo crear otro atomo que será un estado global compartido por toda la app, que será el tipo:
+export const modalTypeState = atom<string>({
+  key: "modalTypeState",
+  default: "dropIn",
+});
+
+Despues,ojo,hay que usarlos usando el hook useRecoilState(o el que necesite) pero pasandole como estado inicial la key del atomo que creé:
+import { modalState } from "atoms/modalAtom";
+import { modalTypeState } from "atoms/modalAtom";
+
+const Input = () => {
+  const { data:session } = useSession();
+  const [modalOpen,setModalOpen] = useRecoilState<boolean>(modalState);
+  const [modalType, setModalType] = useRecoilState<string>(modalTypeState)
+
+Puedo ver que no puede ser más fácil usar Recoil.
+
+          4h 31 ADDING THAT MODAL
+
+Voy a crear un componente que será el Modal.Enviaremos un textarea con una desc del post y un input para la url de la imagen,aparte de un timestamp.Fijate en el helper que se hizo para crear una conexión en base a una URL y una database-name.Es mejor que la opción de Fernando??.Investigar sobre el 403 de Google para el avatar.       
+
+La unidad ch es la medida del ancho del caracter 0(Zero) para la font-family actual.Esto significa que una caja(div) con un width de 40ch siempre puede contener máximo 40 caracteres.Importante(los textos muy anchos no invitan a ser leidos,es por esto que esta unidad debe usarse,)
+.main-content p {
+  max-width: 50ch; <- fijate que se aplica a widths
+}
+Un truco es apuntar a los paragraphs si tengo imagenes,por ejemplo,que si que quiero que se expandan,en vez de apuntar a todo,y centrar ese paragraph.Interesante
